@@ -10,10 +10,10 @@ pub trait Pollable {
 
     fn poll(&mut self) -> Result<PollResult<Self::Item>, Self::Error>;
 
-    fn fuse_result(self) -> FusedResult<Self>
+    fn fuse_result(self) -> FuseResult<Self>
         where Self: Sized
     {
-        FusedResult::Polling(self)
+        FuseResult::Polling(self)
     }
 
     fn join<R>(self, other: R) -> Join<Self, R>
@@ -24,7 +24,7 @@ pub trait Pollable {
     }
 }
 
-pub struct Join<L, R>(FusedResult<L>, FusedResult<R>)
+pub struct Join<L, R>(FuseResult<L>, FuseResult<R>)
     where L: Pollable,
           R: Pollable;
 
@@ -56,25 +56,26 @@ impl<L, R> Pollable for Join<L, R>
     }
 }
 
-pub enum FusedResult<P: Pollable> {
+pub enum FuseResult<P: Pollable> {
     Polling(P),
     Finished(Result<P::Item, P::Error>),
     Empty,
 }
 
-impl<P: Pollable> FusedResult<P> {
+impl<P: Pollable> FuseResult<P> {
     pub fn take(&mut self) -> Result<P::Item, P::Error> {
-        use std::mem::replace;
+        use std::mem;
 
-        if let FusedResult::Finished(r) = replace(self, FusedResult::Empty) {
-            return r;
+        if let FuseResult::Finished(r) = mem::replace(self, FuseResult::Empty) {
+            r
         }
-
-        panic!("Cannot incomplete FusedResult in current state");
+        else {
+            panic!("Cannot incomplete FuseResult in current state")
+        }
     }
 }
 
-impl<P: Pollable> Pollable for FusedResult<P> {
+impl<P: Pollable> Pollable for FuseResult<P> {
 
     type Item = ();
     type Error = ();
@@ -82,21 +83,21 @@ impl<P: Pollable> Pollable for FusedResult<P> {
     fn poll(&mut self) -> Result<PollResult<Self::Item>, Self::Error> {
         loop {
             let result = match *self {
-                FusedResult::Polling(ref mut p) => {
+                FuseResult::Polling(ref mut p) => {
                     match p.poll() {
                         Ok(PollResult::Ready(r)) => Ok(r),
                         Err(e) => Err(e),
                         _ => return Ok(PollResult::NotReady),
                     }
                 },
-                FusedResult::Finished(ref r) => match *r {
+                FuseResult::Finished(ref r) => match *r {
                     Ok(_) => return Ok(PollResult::Ready(())),
                     Err(_) => return Err(()),
                 },
-                FusedResult::Empty => panic!("FusedResult has already been taken"),
+                FuseResult::Empty => panic!("FuseResult has already been taken"),
             };
 
-            *self = FusedResult::Finished(result);
+            *self = FuseResult::Finished(result);
         }
     }
 }
