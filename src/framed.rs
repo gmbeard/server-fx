@@ -1,7 +1,8 @@
 use std::io::{self, Read, Write};
 use codec::{Decode, Encode};
-use pollable::{Pollable, PollResult};
+use pollable::Pollable;
 use sink::{Sink, SinkResult};
+use result::PollResult;
 
 type Poll<T, E> = Result<PollResult<T>, E>;
 type StartSend<T, E> = Result<SinkResult<T>, E>;
@@ -61,4 +62,3 @@ impl<S, E> Sink for Framed<S, E>
         Ok(PollResult::NotReady)
     }
 }
-

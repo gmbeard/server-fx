@@ -1,4 +1,4 @@
-use pollable::PollResult;
+use result::PollResult;
 
 pub enum SinkResult<T> {
     Ready,

@@ -18,6 +18,9 @@ mod pollable;
 mod codec;
 mod framed;
 mod sink;
+mod join;
+mod result;
+mod twist;
 
 fn main() {
     println!("Hello, world!");

@@ -3,7 +3,8 @@ use std::io;
 
 use bind_transport::BindTransport;
 use handler::Handler;
-use pollable::{Pollable, PollResult};
+use pollable::Pollable;
+use result::PollResult;
 
 struct TcpServer<P> {
     proto: P
