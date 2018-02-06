@@ -1,9 +1,10 @@
 use std::rc::Rc;
 use std::io::{self, Read, Write};
+use std::fmt::Debug;
+
 use pollable::Pollable;
 use result::PollResult;
 use join::Join;
-use std::net::TcpStream;
 
 enum TransferState {
     Reading,
@@ -33,6 +34,12 @@ impl<S, D> Transfer<S, D> {
     }
 }
 
+impl<S, D> Transfer<S, D> {
+    fn into_inner(self) -> (Rc<S>, Rc<D>) {
+        (self.source, self.destination)
+    }
+}
+
 impl<S, D> Pollable for Transfer<S, D>
     where for <'a> &'a S: Read,
           for <'a> &'a D: Write,
@@ -44,28 +51,34 @@ impl<S, D> Pollable for Transfer<S, D>
         use std::mem;
 
         loop {
-            match self.state {
+            let next = match self.state {
                 TransferState::Reading => {
-                    match try_poll_io!((&*self.source).read(&mut self.buffer)) {
-                        0 => return Ok(PollResult::Ready(self.transferred)),
-                        n => self.state = TransferState::Writing(n),
+                    let n = try_poll_io!((&*self.source).read(&mut self.buffer));
+                    if 0 == n {
+                        return Ok(PollResult::Ready(self.transferred));
                     }
+
+                    TransferState::Writing(n)
                 },
                 TransferState::Writing(remaining) => {
-                    match try_poll_io!((&*self.destination).write(&self.buffer[..remaining])) {
+                    let result = (&*self.destination).write(&self.buffer[..remaining]);
+                    
+                    match try_poll_io!(result) {
                         0 => return Ok(PollResult::Ready(self.transferred)),
                         n if n == remaining => {
                             self.transferred += remaining;
-                            self.state = TransferState::Reading;
+                            TransferState::Reading
                         },
                         n => {
                             self.transferred += n;
-                            self.state = TransferState::Writing(remaining - n);
+                            TransferState::Writing(remaining - n)
                         },
                     }
                 },
                 TransferState::Done => panic!("Poll called on finished result"),
-            }
+            };
+
+            self.state = next;
         }
     }
 }
@@ -80,12 +93,29 @@ impl<S, D> Twister<S, D>
     where for <'a> &'a S: Read + Write,
           for <'a> &'a D: Read + Write,
 {
-    pub fn new(source: Rc<S>, destination: Rc<D>) -> Twister<S, D> {
+    pub fn new(source: S, destination: D) -> Twister<S, D> {
+        let source = Rc::new(source);
+        let destination = Rc::new(destination);
+
         let inner = 
             Transfer::new(source.clone(), destination.clone())
                 .join(Transfer::new(destination, source));
 
         Twister(inner)
+    }
+}
+
+impl<S, D> Twister<S, D>
+    where for <'a> &'a S: Read + Write,
+          for <'a> &'a D: Read + Write,
+          S: Debug,
+          D: Debug,
+{
+    pub fn into_inner(self) -> (S, D) {
+        let (src_transfer, dest_transfer) = self.0.into_inner();
+        let (src, _) = src_transfer.into_inner();
+        let (dst, _) = dest_transfer.into_inner();
+        (Rc::try_unwrap(src).unwrap(), Rc::try_unwrap(dst).unwrap())
     }
 }
 
@@ -107,6 +137,10 @@ mod twister_should {
     use std::cell::{Ref, RefCell};
     use std::io::{self, Cursor, Read, Write};
 
+    // This type wraps a `Read` type and simulates
+    // bytes arriving after `ready_every` calls. It
+    // also trickles `read`s one byte at a time.
+    #[derive(Debug)]
     struct Trickle<R> {
         inner: R,
         call_count: usize,
@@ -139,6 +173,7 @@ mod twister_should {
     // in `RefCell`s so that we can read and write to it
     // using a shared alias (I.E. `&self`, instead of `&mut self`).
     // This is a requirement of `Twister`
+    #[derive(Debug)]
     struct Half {
         output: RefCell<Trickle<Cursor<Vec<u8>>>>,
         input: RefCell<Cursor<Vec<u8>>>,
@@ -177,15 +212,17 @@ mod twister_should {
     fn copy_both_halves() {
         let first_content = b"Hello, from first half";
         let second_content = b"Hello, from second half";
-        let first_half = Rc::new(Half::new(first_content, 1));
-        let second_half = Rc::new(Half::new(second_content, 7));    
+        let first_half = Half::new(first_content, 1);
+        let second_half = Half::new(second_content, 7);
 
-        let mut twister = Twister::new(first_half.clone(), second_half.clone());
+        let mut twister = Twister::new(first_half, second_half);
         let value = loop {
             if let PollResult::Ready(v) = twister.poll().unwrap() {
                 break v;
             }
         };
+
+        let (first_half, second_half) = twister.into_inner();
 
         assert_eq!(
             (first_content.len(), second_content.len()),

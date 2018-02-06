@@ -21,6 +21,7 @@ mod sink;
 mod join;
 mod result;
 mod twist;
+mod http;
 
 fn main() {
     println!("Hello, world!");

@@ -1,16 +1,35 @@
 use pollable::Pollable;
 use result::PollResult;
 
-pub enum Join<L: Pollable, R: Pollable> {
-    Neither(L, R),
-    Left(L::Item, R),
-    Right(L, R::Item),
-    Done,
+enum JoinState<L, R> {
+    Niether,
+    Left(L),
+    Right(R),
+    Done
+}
+
+pub struct Join<L: Pollable, R: Pollable> {
+    left: L,
+    right: R,
+    state: JoinState<L::Item, R::Item>,
+//    Neither(L, R),
+//    Left(L::Item, R),
+//    Right(L, R::Item),
+//    Done,
 }
 
 impl<L: Pollable, R: Pollable> Join<L, R> {
     pub fn new(left: L, right: R) -> Join<L, R> {
-        Join::Neither(left, right)
+        Join {
+            left: left,
+            right: right,
+            state: JoinState::Niether,
+        }
+//        Join::Neither(left, right)
+    }
+
+    pub fn into_inner(self) -> (L, R) {
+        (self.left, self.right)
     }
 }
 
@@ -25,25 +44,25 @@ impl<L, R> Pollable for Join<L, R>
     fn poll(&mut self) -> Result<PollResult<Self::Item>, Self::Error> {
         use std::mem;
 
-        let next = match mem::replace(self, Join::Done) {
-            Join::Neither(mut left, mut right) => match (left.poll()?, right.poll()?) {
+        let next = match mem::replace(&mut self.state, JoinState::Done) {
+            JoinState::Niether => match (self.left.poll()?, self.right.poll()?) {
                 (PollResult::Ready(lr), PollResult::Ready(rr)) => return Ok(PollResult::Ready((lr, rr))),
-                (PollResult::Ready(lr), _) => Join::Left(lr, right),
-                (_, PollResult::Ready(rr)) => Join::Right(left, rr),
-                _ => Join::Neither(left, right),
+                (PollResult::Ready(lr), _) => JoinState::Left(lr),
+                (_, PollResult::Ready(rr)) => JoinState::Right(rr),
+                _ => JoinState::Niether,
             },
-            Join::Left(lr, mut right) => match right.poll()? {
+            JoinState::Left(lr) => match self.right.poll()? {
                 PollResult::Ready(rr) => return Ok(PollResult::Ready((lr, rr))),
-                _ => Join::Left(lr, right),
+                _ => JoinState::Left(lr),
             },
-            Join::Right(mut left, rr) => match left.poll()? {
+            JoinState::Right(rr) => match self.left.poll()? {
                 PollResult::Ready(lr) => return Ok(PollResult::Ready((lr, rr))),
-                _ => Join::Right(left, rr),
+                _ => JoinState::Right(rr),
             },
-            Join::Done => panic!("Poll called on finished result"),
+            JoinState::Done => panic!("Poll called on finished result"),
         };
 
-        *self = next;
+        self.state = next;
 
         Ok(PollResult::NotReady)
     }
