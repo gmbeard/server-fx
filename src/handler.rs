@@ -7,5 +7,5 @@ pub trait Handler {
     type Error;
     type Pollable: Pollable<Item=Self::Response, Error=Self::Error>;
 
-    fn handle(self, request: Self::Request) -> Self::Pollable;
+    fn handle(&self, request: Self::Request) -> Self::Pollable;
 }

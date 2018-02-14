@@ -1,5 +1,4 @@
 use std::mem;
-use http::types::Header;
 
 fn skip_newline(data: &[u8]) -> &[u8] {
     data.iter()
@@ -8,7 +7,10 @@ fn skip_newline(data: &[u8]) -> &[u8] {
             let (_, tail) = data.split_at(p);
             tail
         })
-        .unwrap_or_else(|| &[])
+        .unwrap_or_else(|| {
+            let last = data.len();
+            &data[last..]
+        })
 }
 
 fn skip_whitespace(data: &[u8]) -> &[u8] {
@@ -18,7 +20,10 @@ fn skip_whitespace(data: &[u8]) -> &[u8] {
             let (_, tail) = data.split_at(p);
             tail
         })
-        .unwrap_or_else(|| &[])
+        .unwrap_or_else(|| {
+            let last = data.len();
+            &data[last..]
+        })
 }
 
 fn skip_header_separator(data: &[u8]) -> &[u8] {
@@ -28,7 +33,10 @@ fn skip_header_separator(data: &[u8]) -> &[u8] {
             let (_, tail) = data.split_at(p);
             tail
         })
-        .unwrap_or_else(|| &[])
+        .unwrap_or_else(|| {
+            let last = data.len();
+            &data[last..]
+        })
 }
 
 fn split_as_first_newline(data: &[u8]) -> Option<(&[u8], &[u8])> {
@@ -116,8 +124,8 @@ impl<'a> ProtocolParser<'a> {
     /// # Examples
     ///
     /// ```
-    /// use twister_http::parser::ProtocolParser;
-    /// use twister_http::HttpMethod;
+    /// use server_fx::http::parser::ProtocolParser;
+    /// use server_fx::http::types::HttpMethod;
     ///
     /// const HTTP: &'static [u8] = b"GET /index.html HTTP/1.1\r\n";
     ///
@@ -195,8 +203,8 @@ impl<'a> HeaderParser<'a> {
     /// # Examples
     ///
     /// ```
-    /// use twister_http::Header;
-    /// use twister_http::parser::HeaderParser;
+    /// use server_fx::http::parser::Header;
+    /// use server_fx::http::parser::HeaderParser;
     ///
     /// const HTTP: &'static [u8] = b"Content-Type: text/xml; charset=utf8\r\n";
     ///
@@ -245,154 +253,201 @@ impl<'a> HeaderParser<'a> {
     }
 }
 
-/// A non-allocating HTTP object parser
-pub enum HttpObjectParser<'headers, 'buffer: 'headers> {
-    #[doc(hidden)]
-    NotStarted(&'headers mut [Header<'buffer>]),
-    #[doc(hidden)]
-    Protocol(&'headers mut [Header<'buffer>], ProtocolParser<'buffer>),
-    #[doc(hidden)]
-    Headers(&'buffer [u8], &'buffer [u8], &'buffer [u8], &'headers mut [Header<'buffer>], HeaderParser<'buffer>),
-    #[doc(hidden)]
-    Done
+struct Object<'headers, 'buffer: 'headers> {
+    version: Option<&'buffer [u8]>,
+    headers: &'headers mut [Header<'buffer>],
 }
 
-impl<'h, 'b: 'h> HttpObjectParser<'h, 'b> 
-{
-    /// Creates a new instance. `headers` will be used to store all
-    /// the headers found in the HTTP object when [`parse`] is called. It
-    /// is important to provide enough space in `headers`, otherwise [`parse`]
-    /// will `panic`.
-    ///
-    /// # Examples
-    /// ```
-    /// use twister_http::Header;
-    /// use twister_http::parser::HttpObjectParser;
-    ///
-    /// let mut headers = vec![Header::default(); 16];
-    /// let mut parser = HttpObjectParser::new(&mut headers);
-    /// ```
-    /// [`parse`]: enum.ResponseParser.html#method.parse
-    pub fn new<'a>(headers: &'a mut [Header<'b>]) -> HttpObjectParser<'a, 'b> {
-        HttpObjectParser::NotStarted(headers)
+impl<'h, 'b: 'h> Object<'h, 'b> {
+    fn version(&self) -> &[u8] {
+        self.version.as_ref()
+            .map(|v| &**v)
+            .expect("'version' is empty")
     }
 
-    /// Parses a HTTP object.
-    ///
-    /// # Return Value
-    /// If parsing succeeds, a `T` is returned. If parsing fails
-    /// due to an incomplete, or invalid object then `None` is returned.
-    ///
-    /// # Panics
-    /// This function will `panic` if there is not enough storage for all
-    /// the headers found in the HTTP object.
-    ///
-    /// # Examples
-    ///
-    /// Parsing a Response
-    ///
-    /// ```
-    /// use std::str;
-    /// use twister_http::{Header, Response};
-    /// use twister_http::parser::HttpObjectParser;
-    ///
-    /// const HTTP: &'static [u8] = 
-    ///     b"HTTP/1.1 200 OK\r\n\
-    ///       Content-Type: text/plain\r\n\
-    ///       Content-Length: 13\r\n\
-    ///       \r\n\
-    ///       Hello, World!";
-    ///
-    /// let mut headers = [Header::default(); 16];
-    /// let mut parser = HttpObjectParser::new(&mut headers);
-    /// let http_object = parser.parse::<Response>(HTTP).unwrap();
-    ///
-    /// assert_eq!("HTTP/1.1", str::from_utf8(http_object.version).unwrap());
-    /// assert_eq!("200", str::from_utf8(http_object.status_code).unwrap());
-    /// assert_eq!("OK", str::from_utf8(http_object.status_text).unwrap());
-    /// assert_eq!(2, http_object.headers.len());
-    ///
-    /// let mut iter = http_object.headers.iter();
-    /// assert_eq!(Header(b"Content-Type", b"text/plain"), *iter.next().unwrap());
-    /// assert_eq!(Header(b"Content-Length", b"13"), *iter.next().unwrap());
-    ///
-    /// assert_eq!("Hello, World!", str::from_utf8(http_object.body).unwrap());
-    /// ```
-    ///
-    /// Parsing a Request
-    ///
-    /// ```
-    /// use std::str;
-    /// use twister_http::{Header, HttpMethod, Request};
-    /// use twister_http::parser::HttpObjectParser;
-    ///
-    /// const HTTP: &'static [u8] = 
-    ///     b"POST /api/resource HTTP/1.1\r\n\
-    ///       Host: docs.rs\r\n\
-    ///       Content-Type: text/plain\r\n\
-    ///       Content-Length: 13\r\n\
-    ///       \r\n\
-    ///       Hello, World!";
-    ///
-    /// let mut headers = [Header::default(); 16];
-    /// let mut parser = HttpObjectParser::new(&mut headers);
-    /// let http_object = parser.parse::<Request>(HTTP).unwrap();
-    ///
-    /// assert_eq!(HttpMethod::Post, http_object.method.into());
-    /// assert_eq!("/api/resource", str::from_utf8(http_object.path).unwrap());
-    /// assert_eq!(3, http_object.headers.len());
-    ///
-    /// let mut iter = http_object.headers.iter();
-    /// assert_eq!(Header(b"Host", b"docs.rs"), *iter.next().unwrap());
-    /// assert_eq!(Header(b"Content-Type", b"text/plain"), *iter.next().unwrap());
-    /// assert_eq!(Header(b"Content-Length", b"13"), *iter.next().unwrap());
-    ///
-    /// assert_eq!("Hello, World!", str::from_utf8(http_object.body).unwrap());
-    /// ```
-    pub fn parse<T>(&mut self, data: &'b [u8]) -> Option<T>
-        where T: From<(&'b [u8], &'b [u8], &'b [u8], &'h [Header<'b>], &'b [u8])>
-    {
-        use self::HttpObjectParser::*;
+    fn headers(&self) -> &[Header<'b>] {
+        self.headers
+    }
+}
 
-        loop {
-            let next = match mem::replace(self, Done) {
-                NotStarted(headers) => Some(Protocol(headers, ProtocolParser::new(data))),
-                Protocol(headers, mut parser) => {
-                    parser.parse()
-                        .map(move |(part1, part2, part3, tail)| {
-                            Headers(part1, part2, part3, headers, HeaderParser::new(tail))
-                        })
-                },
-                Headers(part1, part2, part3, headers, mut parser) => {
-                    let mut header_pos = 0;
-                    while let Some((Header(name, val), tail)) = parser.parse() {
-
-                        if name.len() == 0 {
-                            let parts = (part1, part2, part3, &headers[..header_pos], tail);
-                            return Some(parts.into());
-                        }
-
-                        if header_pos >= headers.len() {
-                            panic!("Not enough room for headers");
-                        }
-
-                        headers[header_pos] = Header(name, val);
-                        parser = HeaderParser::new(tail);
-                        header_pos += 1;
-                    }
-                    
-                    Some(Done)
-                },
-                Done => panic!("parse called on finished result"),
-            };
-
-            if let Some(next) = next {
-                *self = next;
-            }
-            else {
-                return None;
-            }
+impl<'h, 'b: 'h> Object<'h, 'b> {
+    fn new(headers: &'h mut [Header<'b>]) -> Object<'h, 'b> {
+        Object {
+            version: None,
+            headers: headers,
         }
+    }
+
+    fn read_headers(&mut self, 
+                    data: &'b [u8], 
+                    header_data: &'b [u8]) -> usize 
+    {
+        use std::mem::transmute;
+
+        let mut parser = HeaderParser::new(header_data);
+        let mut header_idx = 0;
+        let mut bytes_parsed = 
+            (header_data.as_ptr() as usize) - 
+            (data.as_ptr() as usize);
+
+        while let Some((Header(name, val), tail)) = parser.parse() {
+            if name.len() == 0 {
+                bytes_parsed = (tail.as_ptr() as usize) - 
+                               (data.as_ptr() as usize);
+
+                //  TODO: Is there a better way to shorten this slice?
+                self.headers =  unsafe { 
+                    transmute(&mut self.headers[..header_idx])
+                };
+
+                break;
+            }
+
+            if header_idx >= self.headers.len() {
+                panic!("Not enough space for headers!");
+            }
+
+            self.headers[header_idx] = Header(name, val);
+            header_idx += 1;
+
+            parser = HeaderParser::new(tail);
+        }
+
+        bytes_parsed
+    }
+
+    fn parse<F>(&mut self, data: &'b [u8], mut f: F) -> Option<usize>
+        where F: FnMut(&'b [u8], &'b [u8], &'b [u8]) -> Option<&'b [u8]>
+    {
+        ProtocolParser::new(data).parse()
+            .map(|(part1, part2, part3, tail)| {
+                self.version = f(part1, part2, part3);
+                tail
+            })
+            .map(|header_data| 
+                 self.read_headers(data, header_data)
+            )
+    }
+}
+
+/// A type representing a HTTP header name/value pair. E.g.
+///
+/// ```no_compile
+/// Host: docs.rs:443
+/// ```
+#[derive(Default, Debug, PartialEq, Clone, Copy)]
+pub struct Header<'a>(pub &'a [u8], pub &'a [u8]);
+
+pub struct Request<'headers, 'buffer: 'headers> {
+    #[doc(hidden)]
+    method: Option<&'buffer [u8]>,
+    #[doc(hidden)]
+    path: Option<&'buffer [u8]>,
+    #[doc(hidden)]
+    object: Object<'headers, 'buffer>,
+}
+
+impl<'h, 'b: 'h> Request<'h, 'b> {
+    pub fn method(&self) -> &[u8] {
+        self.method.as_ref()
+            .map(|v| &**v)
+            .expect("'method' is empty")
+    }
+
+    pub fn path(&self) -> &[u8] {
+        self.path.as_ref()
+            .map(|v| &**v)
+            .expect("'path' is empty")
+    }
+
+    pub fn version(&self) -> &[u8] {
+        self.object.version()
+    }
+
+    pub fn headers(&self) -> &[Header<'b>] {
+        self.object.headers()
+    }
+}
+
+impl<'h, 'b: 'h> Request<'h, 'b> {
+    pub fn new(headers: &'h mut [Header<'b>]) -> Request<'h, 'b> {
+        Request {
+            method: None,
+            path: None,
+            object: Object::new(headers),
+        }
+    }
+
+    pub fn parse(&mut self, data: &'b [u8]) -> Option<usize> {
+        let mut method = None;
+        let mut path = None;
+
+        self.object.parse(data, |part1, part2, part3| {
+            method = Some(part1);
+            path = Some(part2);
+            Some(part3)
+        })
+        .map(|n| {
+            self.method = method;
+            self.path = path;
+            n
+        })
+    }
+}
+
+pub struct Response<'headers, 'buffer: 'headers> {
+    status_code: Option<&'buffer [u8]>,
+    status_text: Option<&'buffer [u8]>,
+    object: Object<'headers, 'buffer>,
+}
+
+impl<'h, 'b: 'h> Response<'h, 'b> {
+    pub fn status_code(&self) -> &[u8] {
+        self.status_code
+            .as_ref()
+            .map(|v| &**v)
+            .expect("'status_code' is empty")
+    }
+
+    pub fn status_text(&self) -> &[u8] {
+        self.status_text
+            .as_ref()
+            .map(|v| &**v)
+            .expect("'status_text' is empty")
+    }
+
+    pub fn version(&self) -> &[u8] {
+        self.object.version()
+    }
+
+    pub fn headers(&self) -> &[Header<'b>] {
+        self.object.headers()
+    }
+}
+
+impl<'h, 'b: 'h> Response<'h, 'b> {
+    pub fn new(headers: &'h mut [Header<'b>]) -> Response<'h, 'b> {
+        Response {
+            status_code: None,
+            status_text: None,
+            object: Object::new(headers),
+        }
+    }
+
+    pub fn parse(&mut self, data: &'b [u8]) -> Option<usize> {
+        let mut status_code = None;
+        let mut status_text = None;
+
+        self.object.parse(data, |part1, part2, part3| {
+            status_code = Some(part2);
+            status_text = Some(part3);
+            Some(part1)
+        })
+        .map(|n| {
+            self.status_code = status_code;
+            self.status_text = status_text;
+            n
+        })
     }
 }
 
@@ -479,7 +534,7 @@ mod header_parser_should {
 mod request_parser_should {
     use super::*;
     use std::str;
-    use http::types::{Request, HttpMethod};
+    use http::types;
 
     #[test]
     fn parse_a_request() {
@@ -487,17 +542,48 @@ mod request_parser_should {
         let mut header_size = 16;
         loop {
             let mut headers = vec![Header::default(); header_size];
-            if let Some(r) = HttpObjectParser::new(&mut headers).parse::<Request>(proxy_connect) {
+            let mut parser = Request::new(&mut headers);
+            if let Some(_) = parser.parse(proxy_connect) {
 
-                assert_eq!(HttpMethod::Connect, r.method.into());
-                assert_eq!("docs.rs:443", str::from_utf8(r.path).unwrap());
-                assert_eq!(4, r.headers.len());
-                assert_eq!("Hello, World!\r\n", str::from_utf8(r.body).unwrap());
+                assert_eq!(types::HttpMethod::Connect, parser.method().into());
+                assert_eq!("docs.rs:443", str::from_utf8(parser.path()).unwrap());
+                assert_eq!(4, parser.headers().len());
+//                assert_eq!("Hello, World!\r\n", str::from_utf8(r.body).unwrap());
                 break;
             }
 
             header_size *= 2;
         }
 
+    }
+}
+
+#[cfg(test)]
+mod request_should {
+    use super::*;
+    use http::types::HttpMethod;
+
+    #[test]
+    fn parse_successfully() {
+        let proxy_connect = include_bytes!("../../tests/proxy_connect.txt");
+        const HEADER_SIZE: usize = 16;
+        let mut headers = [Header::default(); HEADER_SIZE];
+        let mut parser = Request::new(&mut headers);
+
+        assert!(parser.parse(proxy_connect).is_some());
+        assert_eq!(HttpMethod::Connect, parser.method().into());
+    }
+
+    #[test]
+    fn parse_with_zero_headers() {
+        let request = b"POST / HTTP/1.1\r\n\r\nHello, World!";
+        const HEADER_SIZE: usize = 16;
+        let mut headers = [Header::default(); HEADER_SIZE];
+        let mut parser = Request::new(&mut headers);
+        let result = parser.parse(request);
+        assert!(result.is_some());
+        assert_eq!(0, parser.headers().len());
+
+        assert_eq!(b"Hello, World!", &request[result.unwrap()..]);
     }
 }

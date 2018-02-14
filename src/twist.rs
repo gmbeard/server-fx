@@ -9,7 +9,6 @@ use join::Join;
 enum TransferState {
     Reading,
     Writing(usize),
-    Done,
 }
 
 struct Transfer<S, D> {
@@ -75,7 +74,6 @@ impl<S, D> Pollable for Transfer<S, D>
                         },
                     }
                 },
-                TransferState::Done => panic!("Poll called on finished result"),
             };
 
             self.state = next;

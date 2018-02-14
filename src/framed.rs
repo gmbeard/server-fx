@@ -13,6 +13,16 @@ pub struct Framed<S, D> {
     buffer: Vec<u8>,
 }
 
+impl<S, D> Framed<S, D> {
+    pub fn new(stream: S, codec: D) -> Framed<S, D> {
+        Framed {
+            stream: stream,
+            decoder: codec,
+            buffer: vec![0_u8; 1024],
+        }
+    }
+}
+
 impl<S, D> Framed<S, D>
     where S: Read,
           D: Decode + Encode,
@@ -55,10 +65,25 @@ impl<S, E> Sink for Framed<S, E>
     type Error = io::Error;
 
     fn start_send(&mut self, item: Self::Item) -> StartSend<Self::Item, Self::Error> {
-        Ok(SinkResult::NotReady(item))
+        if self.buffer.len() != 0 {
+            return Ok(SinkResult::NotReady(item));
+        }
+        self.decoder.encode(item, &mut self.buffer);
+        Ok(SinkResult::Ready)
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::Error> {
-        Ok(PollResult::NotReady)
+        match try_poll_io!(self.stream.write(&self.buffer)) {
+            0 => Ok(PollResult::Ready(())),
+            n => {
+                self.buffer.drain(..n);
+                if self.buffer.len() == 0 {
+                    Ok(PollResult::NotReady)
+                }
+                else {
+                    Ok(PollResult::Ready(()))
+                }
+            }
+        }
     }
 }
