@@ -26,14 +26,18 @@ impl Handler for HttpServer {
 
     fn handle(&self, _request: Self::Request) -> Self::Pollable {
 
-        write!(io::stdout(), "<METHOD> {} {}\r\n", 
+        write!(io::stdout(), "{} {} {}\r\n", 
+               _request.method(),
                quick_str!(_request.path()),
-               quick_str!(_request.version()));
+               quick_str!(_request.version()))
+            .expect("Couldn't write to STDOUT");
+
         for (name, value) in _request.headers() {
             write!(io::stdout(), "{}: {}\r\n", 
-                   quick_str!(name), quick_str!(value));
+                   quick_str!(name), quick_str!(value))
+                .expect("Couldn't write to STDOUT");
         }
-        writeln!(io::stdout(), "");
+        writeln!(io::stdout(), "").expect("Couldn't write to STDOUT");
 
         static RESPONSE: &'static [u8] = 
             b"HTTP/1.1 302 Moved\r\n\
@@ -80,5 +84,6 @@ impl<Io> BindTransport<Io> for HttpProto where
 
 fn main() {
     TcpServer::new(HttpProto)
-        .serve("127.0.0.1:50001", || HttpServer);
+        .serve("127.0.0.1:50500", || HttpServer)
+        .unwrap();
 }

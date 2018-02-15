@@ -1,3 +1,5 @@
+use std::fmt;
+
 use http::parser;
 
 trait FromBytes : Sized {
@@ -60,11 +62,36 @@ impl<'a> From<&'a [u8]> for HttpMethod {
                 5 => HttpMethod::Patch,
                 6 => HttpMethod::Head,
                 7 => HttpMethod::Options,
-                _ => panic!("Unsupported HTTP method"),
+                _ => panic!("Unsupported HTTP method '{}'", 
+                            ::std::str::from_utf8(bytes).unwrap()),
             }
         }
 
-        HttpMethod::Unsupported
+        panic!("Unsupported HTTP method '{}'", 
+               ::std::str::from_utf8(bytes).unwrap());
+//        HttpMethod::Unsupported
+    }
+}
+
+impl<'a> Into<&'static str> for &'a HttpMethod {
+    fn into(self) -> &'static str {
+        match *self {
+            HttpMethod::Connect => "CONNECT", 
+            HttpMethod::Get => "GET",
+            HttpMethod::Post => "POST",
+            HttpMethod::Put => "PUT",
+            HttpMethod::Delete => "DELETE",
+            HttpMethod::Patch => "PATCH",
+            HttpMethod::Head => "HEAD",
+            HttpMethod::Options => "OPTIONS",
+            o => panic!("Unsupported HTTP method {:?}", o),
+        }
+    }
+}
+
+impl fmt::Display for HttpMethod {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", Into::<&'static str>::into(self))
     }
 }
 
