@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use bind_transport::BindTransport;
 use handler::Handler;
-use pollable::Pollable;
+use pollable::{IntoPollable, Pollable};
 use sink::Sink;
 use result::PollResult;
 use connection::Connection;
@@ -26,25 +26,28 @@ impl<P> TcpServer<P>
         S: ToSocketAddrs,
         F: Fn() -> H,
         H: Handler<Request=P::Request, Response=P::Response>,
+        <P::Transport as Sink>::Error: From<<P::Result as IntoPollable>::Error>,
         <P::Transport as Sink>::Error: From<<P::Transport as Pollable>::Error>,
-        <P::Transport as Sink>::Error: From<<H::Pollable as Pollable>::Error>,
+        <P::Transport as Sink>::Error: From<<H::Pollable as IntoPollable>::Error>,
     {
         let listener = net::TcpListener::bind(s)?;
         let handler = Arc::new(f());
 
         for stream in listener.incoming() {
 
-            let mut conn = Connection::new(
-                self.proto.bind_transport(stream?).unwrap(),
-                handler.clone()
-            );
+            let handler = handler.clone();
+            let mut conn =  self.proto.bind_transport(stream?)
+                .into_pollable()
+                .and_then(move |transport| Connection::new(transport, handler));
 
             loop {
                 match conn.poll() {
                     Ok(PollResult::Ready(_)) => break,
                     Err(_) => panic!("Error polling Connection"),
-                    _ => continue,
+                    _ => {},
                 }
+
+                ::std::thread::yield_now();
             }
         }
 

@@ -1,5 +1,5 @@
 use std::io;
-use pollable::Pollable;
+use pollable::{IntoPollable, Pollable};
 use sink::Sink;
 
 pub trait BindTransport<S> where
@@ -8,6 +8,7 @@ pub trait BindTransport<S> where
     type Request;
     type Response;
     type Transport: Pollable<Item=Self::Request> + Sink<Item=Self::Response> + 'static;
+    type Result: IntoPollable<Item=Self::Transport>;
 
-    fn bind_transport(&self, s: S) -> Result<Self::Transport, ()>;
+    fn bind_transport(&self, s: S) -> Self::Result;
 }

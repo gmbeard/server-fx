@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use handler::Handler;
-use pollable::Pollable;
+use pollable::{IntoPollable, Pollable};
 use result::PollResult;
 use sink::{SendOne, Sink, SinkResult};
 
@@ -10,7 +10,7 @@ pub enum Connection<H, S> where
     S: Pollable<Item=H::Request> + Sink<Item=H::Response> + 'static
 {
     Reading(S, Arc<H>),
-    Handling(S, H::Pollable),
+    Handling(S, <H::Pollable as IntoPollable>::Pollable),
     Writing(SendOne<S, H::Response>),
     Done,
 }
@@ -28,7 +28,7 @@ impl<H, S> Pollable for Connection<H, S> where
     H: Handler,
     S: Pollable<Item=H::Request> + Sink<Item=H::Response> + 'static,
     <S as Sink>::Error: From<<S as Pollable>::Error>,
-    <S as Sink>::Error: From<<H::Pollable as Pollable>::Error>,
+    <S as Sink>::Error: From<<H::Pollable as IntoPollable>::Error>,
 {
     type Item = ();
     type Error = <S as Sink>::Error;
@@ -42,7 +42,8 @@ impl<H, S> Pollable for Connection<H, S> where
                     PollResult::NotReady => 
                         Connection::Reading(stream, handler),
                     PollResult::Ready(request) => {
-                        let pollable = handler.handle(request); 
+                        let pollable = handler.handle(request)
+                            .into_pollable();
                         Connection::Handling(stream, pollable)
                     },
                 },

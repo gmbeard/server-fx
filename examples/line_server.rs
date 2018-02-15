@@ -34,8 +34,8 @@ impl Decode for LineCodec {
 impl Encode for LineCodec {
     type Item = Vec<u8>;
 
-    fn encode(&self, mut item: Self::Item, buffer: &mut Vec<u8>) {
-        ::std::mem::swap(&mut item, buffer);
+    fn encode(&self, item: Self::Item, buffer: &mut Vec<u8>) {
+        buffer.extend(&item);
     }
 }
 
@@ -47,8 +47,9 @@ impl<Io> BindTransport<Io> for LineProto where
     type Request = Vec<u8>;
     type Response = Vec<u8>;
     type Transport = Framed<Io, LineCodec>;
+    type Result = Result<Self::Transport, io::Error>;
 
-    fn bind_transport(&self, io: Io) -> Result<Self::Transport, ()> {
+    fn bind_transport(&self, io: Io) -> Self::Result {
         Ok(Framed::new(io, LineCodec))
     }
 }
@@ -68,5 +69,6 @@ impl Handler for Server {
 
 fn main() {
     TcpServer::new(LineProto)
-        .serve("127.0.0.1:50001", || Server);
+        .serve("127.0.0.1:5051", || Server)
+        .unwrap();
 }

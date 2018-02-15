@@ -1,6 +1,6 @@
 extern crate server_fx;
 
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 
 use server_fx::handler::Handler;
 use server_fx::http::types;
@@ -12,32 +12,39 @@ use server_fx::pollable::{IntoPollable, PollableResult};
 
 struct HttpServer;
 
-macro_rules! quick_str {
+macro_rules! str {
     ($e: expr) => {
         ::std::str::from_utf8($e).unwrap()
     }
+}
+
+fn debug_request(r: &types::Request) {
+    write!(io::stdout(), "{} {} {}\r\n", 
+           r.method(),
+           str!(r.path()),
+           str!(r.version()))
+        .expect("Couldn't write to STDOUT");
+
+    for (name, value) in r.headers() {
+        write!(io::stdout(), "{}: {}\r\n", 
+               str!(name), str!(value))
+            .expect("Couldn't write to STDOUT");
+    }
+
+    writeln!(io::stdout(), "")
+        .expect("Couldn't write to STDOUT");
+
 }
 
 impl Handler for HttpServer {
     type Request = types::Request;
     type Response = Vec<u8>;
     type Error = io::Error;
-    type Pollable = PollableResult<Self::Response, Self::Error>;
+    type Pollable = Result<Self::Response, Self::Error>;
 
-    fn handle(&self, _request: Self::Request) -> Self::Pollable {
+    fn handle(&self, request: Self::Request) -> Self::Pollable {
 
-        write!(io::stdout(), "{} {} {}\r\n", 
-               _request.method(),
-               quick_str!(_request.path()),
-               quick_str!(_request.version()))
-            .expect("Couldn't write to STDOUT");
-
-        for (name, value) in _request.headers() {
-            write!(io::stdout(), "{}: {}\r\n", 
-                   quick_str!(name), quick_str!(value))
-                .expect("Couldn't write to STDOUT");
-        }
-        writeln!(io::stdout(), "").expect("Couldn't write to STDOUT");
+        debug_request(&request);
 
         static RESPONSE: &'static [u8] = 
             b"HTTP/1.1 302 Moved\r\n\
@@ -46,7 +53,7 @@ impl Handler for HttpServer {
               Connection: close\r\n\
               \r\n";
 
-        Ok(RESPONSE.to_vec()).into_pollable()
+        Ok(RESPONSE.to_vec())
     }
 }
 
@@ -76,14 +83,15 @@ impl<Io> BindTransport<Io> for HttpProto where
     type Request = types::Request;
     type Response = Vec<u8>;
     type Transport = Framed<Io, HttpCodec>;
+    type Result = Result<Self::Transport, io::Error>;
 
-    fn bind_transport(&self, io: Io) -> Result<Self::Transport, ()> {
+    fn bind_transport(&self, io: Io) -> Self::Result {
         Ok(Framed::new(io, HttpCodec))
     }
 }
 
 fn main() {
     TcpServer::new(HttpProto)
-        .serve("127.0.0.1:50500", || HttpServer)
+        .serve("127.0.0.1:5050", || HttpServer)
         .unwrap();
 }
