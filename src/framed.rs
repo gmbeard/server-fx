@@ -18,7 +18,7 @@ impl<S, D> Framed<S, D> {
         Framed {
             stream: stream,
             decoder: codec,
-            buffer: vec![0_u8; 1024],
+            buffer: Vec::with_capacity(1024),
         }
     }
 }
