@@ -20,7 +20,6 @@ pub trait Pollable {
         F: FnOnce(Self::Item) -> R,
         R: Pollable,
         R::Error: From<Self::Error>,
-//        Self::Error: From<R::Error>,
         Self: Sized,
     {
         AndThen::new(self, f)
@@ -33,6 +32,16 @@ pub trait IntoPollable {
     type Pollable: Pollable<Item=Self::Item, Error=Self::Error>;
 
     fn into_pollable(self) -> Self::Pollable;
+}
+
+impl<P: Pollable> IntoPollable for P {
+    type Item = P::Item;
+    type Error = P::Error;
+    type Pollable = P;
+
+    fn into_pollable(self) -> Self::Pollable {
+        self
+    }
 }
 
 impl<T, E> IntoPollable for Result<T, E> {
