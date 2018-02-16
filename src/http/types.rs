@@ -2,6 +2,237 @@ use std::fmt;
 
 use http::parser;
 
+mod v2 {
+    use std::fmt;
+
+    use super::HttpMethod;
+    use super::to_lower;
+
+    use pollable::{IntoPollable, Pollable, PollableResult};
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum HttpVersion {
+        Http1,
+        Http11,
+    }
+
+    impl fmt::Display for HttpVersion {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            match *self {
+                HttpVersion::Http1 => write!(f, "HTTP/1.0"),
+                HttpVersion::Http11 => write!(f, "HTTP/1.1"),
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct Header(String, String);
+
+    type BodyChunk = Vec<u8>;
+
+    pub struct HeaderIter<'a>(::std::slice::Iter<'a, Header>);
+
+    impl<'a> Iterator for HeaderIter<'a> {
+        type Item = (&'a str, &'a str);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.0.next()
+                .map(|h| (&*h.0, &*h.1))
+        }
+    }
+
+    struct Object<B> {
+        version: HttpVersion,
+        headers: Vec<Header>,
+        body: B,
+    }
+
+    impl<B> Object<B> where
+        B: Pollable<Item=BodyChunk>
+    {
+        fn version(&self) -> HttpVersion {
+            self.version
+        }
+
+        fn add_header(&mut self, name: &str, value: &str) {
+            self.headers.push(Header(name.to_owned(), value.to_owned()));
+        }
+
+        fn headers(&self) -> HeaderIter {
+            HeaderIter(self.headers.iter())
+        }
+
+        fn header_value(&self, name: &str) -> Option<&str> {
+            self.headers()
+                .position(|(n, _)| {
+                    n.as_bytes()
+                        .iter()
+                        .map(|b| to_lower(*b))
+                        .eq(name.as_bytes()
+                            .iter()
+                            .map(|b| to_lower(*b))
+                        )
+                })
+                .map(|i| &*self.headers[i].1)
+        }
+    }
+
+    pub struct Response<B = PollableResult<BodyChunk, ()>> {
+        inner: Object<B>,
+        status_code: usize,
+        status_text: String,
+    }
+
+    impl<B> Response<B> where
+        B: Pollable<Item=BodyChunk>
+    {
+        pub fn version(&self) -> HttpVersion {
+            self.inner.version()
+        }
+
+        pub fn status_code(&self) -> usize {
+            self.status_code
+        }
+
+        pub fn status_text(&self) ->  &str {
+            &*self.status_text
+        }
+
+        pub fn add_header(&mut self, name: &str, value: &str) {
+            self.inner.add_header(name, value);
+        }
+
+        pub fn headers(&self) -> HeaderIter {
+            self.inner.headers()
+        }
+
+        pub fn header_value(&self, name: &str) -> Option<&str> {
+            self.inner.header_value(name)
+        }
+    }
+
+    pub struct Request<B = PollableResult<BodyChunk, ()>> {
+        inner: Object<B>,
+        method: HttpMethod,
+        path: String,
+    }
+
+    impl<B> Request<B> where
+        B: Pollable<Item=BodyChunk>
+    {
+        pub fn version(&self) -> HttpVersion {
+            self.inner.version()
+        }
+
+        pub fn path(&self) -> &str {
+            &*self.path
+        }
+
+        pub fn method(&self) ->  HttpMethod {
+            self.method
+        }
+
+        pub fn add_header(&mut self, name: &str, value: &str) {
+            self.inner.add_header(name, value);
+        }
+
+        pub fn headers(&self) -> HeaderIter {
+            self.inner.headers()
+        }
+
+        pub fn header_value(&self, name: &str) -> Option<&str> {
+            self.inner.header_value(name)
+        }
+    }
+
+    pub struct ResponseBuilder<'a> {
+        version: HttpVersion,
+        status_code: usize,
+        status_text: &'a str,
+    }
+    
+    impl<'a> ResponseBuilder<'a> {
+        pub fn new(status_code: usize, 
+                   status_text: &'a str) -> ResponseBuilder<'a>
+        {
+            ResponseBuilder {
+                version: HttpVersion::Http11,
+                status_code: status_code,
+                status_text: status_text,
+            }
+        }
+
+        pub fn build(&self) -> Response {
+            self.build_with_pollable(Ok(vec![]))
+        }
+
+        pub fn build_with_buffer<I>(&self, body: I) -> Response where
+                I: IntoIterator<Item=u8>
+        {
+            self.build_with_pollable(Ok(body.into_iter().collect::<BodyChunk>()))
+        }
+
+        pub fn build_with_pollable<B>(&self, body: B) 
+            -> Response<B::Pollable> where
+                B: IntoPollable<Item=BodyChunk>
+        {
+            Response {
+                inner: Object {
+                    version: self.version,
+                    headers: vec![],
+                    body: body.into_pollable(),
+                },
+                status_code: self.status_code,
+                status_text: String::from(self.status_text),
+            }
+        }
+    }
+
+    pub struct RequestBuilder<'a> {
+        method: HttpMethod,
+        path: &'a str,
+        version: HttpVersion,
+    }
+    
+    impl<'a> RequestBuilder<'a> {
+        pub fn new<M>(method: M, 
+                      path: &'a str) -> RequestBuilder<'a> where
+            M: Into<HttpMethod>
+        {
+            RequestBuilder {
+                method: method.into(),
+                path: path,
+                version: HttpVersion::Http11,
+            }
+        }
+
+        pub fn build(&self) -> Request {
+            self.build_with_pollable(Ok(vec![]))
+        }
+
+        pub fn build_with_buffer<I>(&self, body: I) -> Request where
+                I: IntoIterator<Item=u8>
+        {
+            self.build_with_pollable(Ok(body.into_iter().collect::<BodyChunk>()))
+        }
+
+        pub fn build_with_pollable<B>(&self, body: B) 
+            -> Request<B::Pollable> where
+                B: IntoPollable<Item=BodyChunk>
+        {
+            Request {
+                inner: Object {
+                    version: self.version,
+                    headers: vec![],
+                    body: body.into_pollable(),
+                },
+                method: self.method,
+                path: String::from(self.path),
+            }
+        }
+    }
+}
+
 trait FromBytes : Sized {
     fn from_bytes(bytes: &[u8]) -> Option<Self>;
 }
@@ -95,15 +326,21 @@ impl fmt::Display for HttpMethod {
     }
 }
 
-fn convert_slice<T>(s: &[T], source: &[T]) -> Slice {
-    Slice( 
-        (s.as_ptr() as usize) - (source.as_ptr() as usize ),
-        (s.as_ptr() as usize + s.len()) - (source.as_ptr() as usize)
-    )
+fn convert_slice_to_indices<T>(s: &[T], source: &[T]) -> Slice {
+    let (sub, source) = {
+        ((s.as_ptr() as usize, s.as_ptr() as usize + s.len()),
+        (source.as_ptr() as usize, source.as_ptr() as usize + source.len()))
+    };
+
+    if (sub.0 < source.0) || (sub.1 > source.1) {
+        panic!("Sub-slice is outside the bounds of its source");
+    }
+
+    Slice(sub.0 - source.0, sub.1 - source.0) 
 }
 
 trait FromParsed<Source> {
-    fn from_parsed(source: Source, buffer: &[u8]) -> Self;
+    fn from_parsed(source: Source, header: &[u8], body: &[u8]) -> Self;
 }
 
 struct Slice(usize, usize);
@@ -127,23 +364,47 @@ impl<'a> Iterator for HeaderIter<'a> {
     }
 }
 
+struct DetachedHeaderIter<'a>(&'a [u8], ::std::slice::Iter<'a, Header>);
+
+impl<'a> Iterator for DetachedHeaderIter<'a> {
+    type Item = (&'a str, &'a str);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use std::str::from_utf8;
+
+        self.1.next()
+            .map(|h| (
+                from_utf8(&self.0[h.name.0..h.name.1]).unwrap(),
+                from_utf8(&self.0[h.value.0..h.value.1]).unwrap()
+            ))
+    }
+}
+
 struct DetachedRequest {
     method: HttpMethod,
     path: Slice,
     version: Slice,
     headers: Vec<Header>,
+    body: Slice,
 }
 
 impl DetachedRequest {
-    fn bind_buffer(self, buffer: Vec<u8>) -> Request {
-        let byte_length = self.headers.last()
-            .map(|h| h.value.1)
-            .unwrap_or_else(|| self.version.1);
+    fn method(&self) -> HttpMethod {
+        self.method
+    }
 
-        Request {
-            inner: self,
-            buffer: buffer,
-        }
+    fn path<'a>(&'a self, buffer: &'a [u8]) -> &'a str {
+        ::std::str::from_utf8(
+            &buffer[self.path.0..self.path.1]).unwrap()
+    }
+
+    fn version<'a>(&'a self, buffer: &'a [u8]) -> &'a str {
+        ::std::str::from_utf8(
+            &buffer[self.version.0..self.version.1]).unwrap()
+    }
+
+    fn headers<'a>(&'a self, buffer: &'a [u8]) -> DetachedHeaderIter<'a> {
+        DetachedHeaderIter(buffer, self.headers.iter())
     }
 }
 
@@ -152,86 +413,54 @@ struct DetachedResponse {
     status_code: Slice,
     status_text: Slice,
     headers: Vec<Header>,
+    body: Slice,
 }
 
 impl DetachedResponse {
-    fn bind_buffer(self, buffer: Vec<u8>) -> Response {
-        let byte_length = self.headers.last()
-            .map(|h| h.value.1)
-            .unwrap_or_else(|| self.status_text.1);
+    fn status_code<'a>(&'a self, buffer: &'a [u8]) -> &'a str {
+        ::std::str::from_utf8(
+            &buffer[self.status_code.0..self.status_code.1]).unwrap()
+    }
 
-        Response {
-            inner: self,
-            buffer: buffer,
-        }
+    fn status_text<'a>(&'a self, buffer: &'a [u8]) -> &'a str {
+        ::std::str::from_utf8(
+            &buffer[self.status_text.0..self.status_text.1]).unwrap()
+    }
+
+    fn version<'a>(&'a self, buffer: &'a [u8]) -> &'a str {
+        ::std::str::from_utf8(
+            &buffer[self.version.0..self.version.1]).unwrap()
+    }
+
+    fn headers<'a>(&'a self, buffer: &'a [u8]) -> DetachedHeaderIter<'a> {
+        DetachedHeaderIter(buffer, self.headers.iter())
     }
 }
 
-pub struct Response {
-    inner: DetachedResponse,
-    buffer: Vec<u8>,
-}
-
-impl Response {
-    pub fn version(&self) -> &[u8] {
-        &self.buffer[self.inner.version.0..self.inner.version.1]
-    }
-
-    pub fn status_code(&self) -> &[u8] {
-        &self.buffer[self.inner.status_code.0..self.inner.status_code.1]
-    }
-
-    pub fn status_text(&self) -> &[u8] {
-        &self.buffer[self.inner.status_text.0..self.inner.status_text.1]
-    }
-
-    pub fn headers(&self) -> HeaderIter {
-        HeaderIter(&self.buffer, self.inner.headers.iter())
-    }
-}
-
-pub struct Request {
-    inner: DetachedRequest,
-    buffer: Vec<u8>,
-}
-
-impl Request {
-    pub fn method(&self) -> HttpMethod {
-        self.inner.method
-    }
-
-    pub fn path(&self) -> &[u8] {
-        &self.buffer[self.inner.path.0..self.inner.path.1]
-    }
-
-    pub fn version(&self) -> &[u8] {
-        &self.buffer[self.inner.version.0..self.inner.version.1]
-    }
-
-    pub fn headers(&self) -> HeaderIter {
-        HeaderIter(&self.buffer, self.inner.headers.iter())
-    }
-}
+pub use self::v2::{Request, RequestBuilder, Response, ResponseBuilder};
 
 impl<'h, 'b: 'h> FromParsed<parser::Request<'h, 'b>> for DetachedRequest {
     fn from_parsed(source: parser::Request<'h, 'b>, 
-                   buffer: &[u8]) -> DetachedRequest
+                   header: &[u8],
+                   body: &[u8]) -> DetachedRequest
     {
         let method = source.method().into();
-        let path = convert_slice(source.path(), buffer);
-        let version = convert_slice(source.version(), buffer);
+        let path = convert_slice_to_indices(source.path(), header);
+        let version = convert_slice_to_indices(source.version(), header);
         let headers = source.headers().iter()
             .map(|h| Header {
-                name: convert_slice(h.0, buffer),
-                value: convert_slice(h.1, buffer),
+                name: convert_slice_to_indices(h.0, header),
+                value: convert_slice_to_indices(h.1, header),
             })
             .collect::<Vec<_>>();
+        let body = convert_slice_to_indices(body, header);
 
         DetachedRequest {
             method: method,
             path: path,
             version: version,
             headers: headers,
+            body: body,
         }
     }
 }
@@ -239,60 +468,113 @@ impl<'h, 'b: 'h> FromParsed<parser::Request<'h, 'b>> for DetachedRequest {
 impl<'h, 'b: 'h> FromParsed<parser::Response<'h, 'b>> for DetachedResponse {
 
     fn from_parsed(source: parser::Response<'h, 'b>,
-                   buffer: &[u8]) -> DetachedResponse
+                   header: &[u8],
+                   body: &[u8]) -> DetachedResponse
     {
-        let version = convert_slice(source.version(), buffer);
-        let status_code = convert_slice(source.status_code(), buffer);
-        let status_text = convert_slice(source.status_text(), buffer);
+        let version = convert_slice_to_indices(source.version(), header);
+        let status_code = convert_slice_to_indices(source.status_code(), header);
+        let status_text = convert_slice_to_indices(source.status_text(), header);
         let headers = source.headers().iter()
             .map(|h| Header {
-                name: convert_slice(h.0, buffer),
-                value: convert_slice(h.1, buffer),
+                name: convert_slice_to_indices(h.0, header),
+                value: convert_slice_to_indices(h.1, header),
             })
             .collect::<Vec<_>>();
+        let body = convert_slice_to_indices(body, header);
 
         DetachedResponse {
             version: version,
             status_code: status_code,
             status_text: status_text,
             headers: headers,
+            body: body,
         }
     }
 }
 
 pub fn parse_request(buffer: &mut Vec<u8>) -> Option<Request> {
-    let (request, consumed) = {
+    use std::str::from_utf8;
+
+    let (r, consumed) = {
         let mut headers = [parser::Header::default(); 32];
         let mut request = parser::Request::new(&mut headers);
+        //  TODO:
+        //      Properly parse the body...
         if let Some(n) = request.parse(buffer) {
-            (DetachedRequest::from_parsed(request, buffer), n)
+            (DetachedRequest::from_parsed(request, buffer, &buffer[n..n]), n)
         }
         else {
             return None;
         }
     };
 
-    Some(request.bind_buffer(buffer.drain(..consumed).collect()))
+    let mut request = 
+        RequestBuilder::new(r.method(), r.path(buffer))
+            .build();
+
+    for (name, value) in r.headers(buffer) {
+        request.add_header(name, value);
+    }
+    
+    buffer.drain(..consumed);
+    Some(request)
 }
 
 pub fn parse_response(buffer: &mut Vec<u8>) -> Option<Response> {
-    let (response, consumed) = {
+    use std::str::from_utf8;
+
+    let (r, consumed) = {
         let mut headers = [parser::Header::default(); 32];
         let mut response = parser::Response::new(&mut headers);
+        //  TODO:
+        //      Properly parse the body...
         if let Some(n) = response.parse(buffer) {
-            (DetachedResponse::from_parsed(response, buffer), n)
+            (DetachedResponse::from_parsed(response, buffer, &buffer[n..n]), n)
         }
         else {
             return None;
         }
     };
 
-    Some(response.bind_buffer(buffer.drain(..consumed).collect()))
+    let mut response = 
+        ResponseBuilder::new(r.status_code(buffer).parse().unwrap(), 
+                             r.status_text(buffer))
+            .build();
+
+    for (name, value) in r.headers(buffer) {
+        response.add_header(name, value);
+    }
+    
+    buffer.drain(..consumed);
+    Some(response)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn add_header() {
+        let mut buffer = b"HTTP/1.1 200 Ok\r\n\
+            Host: www.someserver.com\r\n\
+            \r\n\
+            Hello, World!".to_vec();
+
+        let mut r = parse_response(&mut buffer).unwrap();
+        r.add_header("Accept", "text/json");
+        r.add_header("X-Some-Header", "1234567890");
+
+        assert_eq!(3, r.headers().count());
+        assert_eq!(
+            ("Accept".as_ref(), "text/json".as_ref()), 
+            r.headers().nth(1).unwrap()
+        );
+
+        assert_eq!(
+            ("X-Some-Header".as_ref(), "1234567890".as_ref()), 
+            r.headers().nth(2).unwrap()
+        );
+    }
 
     #[test]
     fn convert_a_parsed_request() {
@@ -304,10 +586,10 @@ mod tests {
         let r = parse_request(&mut buffer).unwrap();
 
         assert_eq!(HttpMethod::Get, r.method());
-        assert_eq!(b"/index.html", r.path());
-        assert_eq!(b"HTTP/1.1", r.version());
+        assert_eq!("/index.html", r.path());
+        assert_eq!(v2::HttpVersion::Http11, r.version());
         assert_eq!(
-            (b"Host".as_ref(), b"www.someserver.com".as_ref()), 
+            ("Host".as_ref(), "www.someserver.com".as_ref()), 
             r.headers().next().unwrap()
         );
         assert_eq!(b"Hello, World!", &*buffer);
@@ -322,11 +604,11 @@ mod tests {
 
         let r = parse_response(&mut buffer).unwrap();
 
-        assert_eq!(b"HTTP/1.1", r.version());
-        assert_eq!(b"404", r.status_code());
-        assert_eq!(b"Not found", r.status_text());
+        assert_eq!(v2::HttpVersion::Http11, r.version());
+        assert_eq!(404, r.status_code());
+        assert_eq!("Not found", r.status_text());
         assert_eq!(
-            (b"Host".as_ref(), b"www.someserver.com".as_ref()), 
+            ("Host".as_ref(), "www.someserver.com".as_ref()), 
             r.headers().next().unwrap()
         );
         assert_eq!(b"Hello, World!", &*buffer);

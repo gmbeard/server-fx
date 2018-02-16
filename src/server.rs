@@ -29,6 +29,7 @@ impl<P> TcpServer<P>
         <P::Transport as Sink>::Error: From<<P::Result as IntoPollable>::Error>,
         <P::Transport as Sink>::Error: From<<P::Transport as Pollable>::Error>,
         <P::Transport as Sink>::Error: From<<H::Pollable as IntoPollable>::Error>,
+        <P::Transport as Sink>::Error: ::std::fmt::Debug,
     {
         let listener = net::TcpListener::bind(s)?;
         let handler = Arc::new(f());
@@ -43,7 +44,7 @@ impl<P> TcpServer<P>
             loop {
                 match conn.poll() {
                     Ok(PollResult::Ready(_)) => break,
-                    Err(_) => panic!("Error polling Connection"),
+                    Err(e) => panic!("Error polling Connection: {:?}", e),
                     _ => {},
                 }
 

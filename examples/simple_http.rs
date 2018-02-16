@@ -21,13 +21,12 @@ macro_rules! str {
 fn debug_request(r: &types::Request) {
     write!(io::stdout(), "{} {} {}\r\n", 
            r.method(),
-           str!(r.path()),
-           str!(r.version()))
+           r.path(),
+           r.version())
         .expect("Couldn't write to STDOUT");
 
     for (name, value) in r.headers() {
-        write!(io::stdout(), "{}: {}\r\n", 
-               str!(name), str!(value))
+        write!(io::stdout(), "{}: {}\r\n", name, value)
             .expect("Couldn't write to STDOUT");
     }
 
@@ -38,7 +37,7 @@ fn debug_request(r: &types::Request) {
 
 impl Handler for HttpServer {
     type Request = types::Request;
-    type Response = Vec<u8>;
+    type Response = types::Response;
     type Error = io::Error;
     type Pollable = Result<Self::Response, Self::Error>;
 
@@ -46,14 +45,21 @@ impl Handler for HttpServer {
 
         debug_request(&request);
 
-        static RESPONSE: &'static [u8] = 
-            b"HTTP/1.1 302 Moved\r\n\
-              Content-Length: 0\r\n\
-              Location: /about.html\r\n\
-              Connection: close\r\n\
-              \r\n";
+        let mut response = types::ResponseBuilder::new(302, "Moved")
+            .build();
 
-        Ok(RESPONSE.to_vec())
+        response.add_header("Content-Length", "0");
+        response.add_header("Location", "/about.html");
+        response.add_header("Connection", "close");
+
+//        static RESPONSE: &'static [u8] = 
+//            b"HTTP/1.1 302 Moved\r\n\
+//              Content-Length: 0\r\n\
+//              Location: /about.html\r\n\
+//              Connection: close\r\n\
+//              \r\n";
+
+        Ok(response)
     }
 }
 
@@ -68,10 +74,19 @@ impl Decode for HttpCodec {
 }
 
 impl Encode for HttpCodec {
-    type Item = Vec<u8>;
+    type Item = types::Response;
 
     fn encode(&self, response: Self::Item, buffer: &mut Vec<u8>) {
-        ::std::mem::replace(buffer, response);
+        let mut s = format!("{} {} {}\r\n",
+                        response.version(),
+                        response.status_code(),
+                        response.status_text());
+        for (n, v) in response.headers() {
+            s.push_str(format!("{}: {}\r\n", n, v).as_ref());
+        }
+        s.push_str(format!("\r\n").as_ref());
+
+        buffer.extend(s.as_bytes());
     }
 }
 
@@ -81,7 +96,7 @@ impl<Io> BindTransport<Io> for HttpProto where
     Io: io::Read + io::Write + 'static
 {
     type Request = types::Request;
-    type Response = Vec<u8>;
+    type Response = types::Response;
     type Transport = Framed<Io, HttpCodec>;
     type Result = Result<Self::Transport, io::Error>;
 
