@@ -1,16 +1,24 @@
 use std::mem;
 
+fn header_line_is_empty(data: &[u8]) -> bool {
+    (data.len() > 0 && data[0] == b'\n') ||
+        (data.len() > 1 && data[0] == b'\r' && data[1] == b'\n')
+}
+
 fn skip_newline(data: &[u8]) -> &[u8] {
+    let mut to_skip = 0;
     data.iter()
-        .position(|b| *b != b'\r' && *b != b'\n')
+        .position(|b| *b == b'\r')
         .map(|p| {
-            let (_, tail) = data.split_at(p);
-            tail
-        })
-        .unwrap_or_else(|| {
-            let last = data.len();
-            &data[last..]
-        })
+            to_skip = p + 1;
+        });
+    data.iter()
+        .position(|b| *b == b'\n')
+        .map(|p| {
+            to_skip = p + 1;
+        });
+
+    &data[to_skip..]
 }
 
 fn skip_whitespace(data: &[u8]) -> &[u8] {
@@ -22,7 +30,7 @@ fn skip_whitespace(data: &[u8]) -> &[u8] {
         })
         .unwrap_or_else(|| {
             let last = data.len();
-            &data[last..]
+            &data[0..0]
         })
 }
 
@@ -35,11 +43,11 @@ fn skip_header_separator(data: &[u8]) -> &[u8] {
         })
         .unwrap_or_else(|| {
             let last = data.len();
-            &data[last..]
+            &data[0..0]
         })
 }
 
-fn split_as_first_newline(data: &[u8]) -> Option<(&[u8], &[u8])> {
+fn split_at_first_newline(data: &[u8]) -> Option<(&[u8], &[u8])> {
     data.iter()
         .position(|byte| *byte == b'\r' || *byte == b'\n')
         .map(|p| data.split_at(p))
@@ -156,7 +164,7 @@ impl<'a> ProtocolParser<'a> {
                         })
                 },
                 Version(method, url, data) => {
-                    return split_as_first_newline(data)
+                    return split_at_first_newline(data)
                         .map(|(val, tail)| {
                             (method, url, val, skip_newline(tail))
                         });
@@ -223,19 +231,17 @@ impl<'a> HeaderParser<'a> {
         loop {
             let next = match mem::replace(self, Done) {
                 Name(data) => {
-                    if let Some(state) = split_at_first_header_separator(data)
+                    if header_line_is_empty(data) {
+                        return Some((Header(&data[0..0], &data[0..0]), skip_newline(data)));
+                    }
+
+                    split_at_first_header_separator(data)
                         .map(|(val, tail)| {
                             Value(val, skip_header_separator(tail))
                         })
-                    {
-                        Some(state)
-                    }
-                    else {
-                        return Some((Header(&[], &[]), skip_newline(data)));
-                    }
                 },
                 Value(name, data) => {
-                    return split_as_first_newline(data)
+                    return split_at_first_newline(data)
                         .map(|(val, tail)| {
                             (Header(name, val), skip_newline(tail))
                         });
@@ -280,7 +286,7 @@ impl<'h, 'b: 'h> Object<'h, 'b> {
 
     fn read_headers(&mut self, 
                     data: &'b [u8], 
-                    header_data: &'b [u8]) -> usize 
+                    header_data: &'b [u8]) -> Option<usize>
     {
         use std::mem::transmute;
 
@@ -291,16 +297,15 @@ impl<'h, 'b: 'h> Object<'h, 'b> {
             (data.as_ptr() as usize);
 
         while let Some((Header(name, val), tail)) = parser.parse() {
-            if name.len() == 0 {
-                bytes_parsed = (tail.as_ptr() as usize) - 
-                               (data.as_ptr() as usize);
+            bytes_parsed = (tail.as_ptr() as usize) - 
+                           (data.as_ptr() as usize);
 
-                //  TODO: Is there a better way to shorten this slice?
+            if name.len() == 0 {
                 self.headers =  unsafe { 
                     transmute(&mut self.headers[..header_idx])
                 };
 
-                break;
+                return Some(bytes_parsed)
             }
 
             if header_idx >= self.headers.len() {
@@ -313,7 +318,7 @@ impl<'h, 'b: 'h> Object<'h, 'b> {
             parser = HeaderParser::new(tail);
         }
 
-        bytes_parsed
+        None
     }
 
     fn parse<F>(&mut self, data: &'b [u8], mut f: F) -> Option<usize>
@@ -324,7 +329,7 @@ impl<'h, 'b: 'h> Object<'h, 'b> {
                 self.version = f(part1, part2, part3);
                 tail
             })
-            .map(|header_data| 
+            .and_then(|header_data| 
                  self.read_headers(data, header_data)
             )
     }
@@ -335,8 +340,18 @@ impl<'h, 'b: 'h> Object<'h, 'b> {
 /// ```no_compile
 /// Host: docs.rs:443
 /// ```
-#[derive(Default, Debug, PartialEq, Clone, Copy)]
+#[derive(Default, PartialEq, Clone, Copy)]
 pub struct Header<'a>(pub &'a [u8], pub &'a [u8]);
+
+impl<'a> ::std::fmt::Debug for Header<'a> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        use std::str::from_utf8;
+
+        write!(f, "{}: {}\r\n",
+              from_utf8(self.0).unwrap(),
+              from_utf8(self.1).unwrap())
+    }
+}
 
 pub struct Request<'headers, 'buffer: 'headers> {
     #[doc(hidden)]
@@ -345,6 +360,21 @@ pub struct Request<'headers, 'buffer: 'headers> {
     path: Option<&'buffer [u8]>,
     #[doc(hidden)]
     object: Object<'headers, 'buffer>,
+}
+
+impl<'h, 'b: 'h> ::std::fmt::Debug for Request<'h, 'b> {
+
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        use std::str::from_utf8;
+        write!(f, "{} {} {}\r\n", 
+               from_utf8(self.method()).unwrap(),
+               from_utf8(self.path()).unwrap(),
+               from_utf8(self.version()).unwrap());
+        for h in self.headers() {
+            write!(f, "{:?}", h);
+        }
+        Ok(())
+    }
 }
 
 impl<'h, 'b: 'h> Request<'h, 'b> {
@@ -477,7 +507,7 @@ mod header_parser_should {
     #[test]
     fn parse_multiple_headers() {
         let proxy_connect = include_bytes!("../../tests/proxy_connect.txt");
-        let (_, headers) = split_as_first_newline(proxy_connect).unwrap();
+        let (_, headers) = split_at_first_newline(proxy_connect).unwrap();
         let headers = skip_newline(headers);
 
         let mut p = HeaderParser::new(headers);
@@ -517,7 +547,7 @@ mod header_parser_should {
     #[test]
     fn parse_a_header() {
         let proxy_connect = include_bytes!("../../tests/proxy_connect.txt");
-        let (_, headers) = split_as_first_newline(proxy_connect).unwrap();
+        let (_, headers) = split_at_first_newline(proxy_connect).unwrap();
         let headers = skip_newline(headers);
 
         let mut p = HeaderParser::new(headers);
