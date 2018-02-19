@@ -10,7 +10,8 @@ type StartSend<T, E> = Result<SinkResult<T>, E>;
 pub struct Framed<S, D> {
     stream: S,
     decoder: D,
-    buffer: Vec<u8>,
+    recv_buffer: Vec<u8>,
+    send_buffer: Vec<u8>,
 }
 
 impl<S, D> Framed<S, D> {
@@ -18,7 +19,8 @@ impl<S, D> Framed<S, D> {
         Framed {
             stream: stream,
             decoder: codec,
-            buffer: Vec::with_capacity(1024),
+            recv_buffer: Vec::with_capacity(1024),
+            send_buffer: Vec::with_capacity(1024),
         }
     }
 }
@@ -48,9 +50,9 @@ impl<S, D> Pollable for Framed<S, D>
                 n => n,
             };
 
-            self.buffer.extend(&buf[..bytes_read]);
+            self.recv_buffer.extend(&buf[..bytes_read]);
 
-            if let Some(request) = self.decoder.decode(&mut self.buffer) {
+            if let Some(request) = self.decoder.decode(&mut self.recv_buffer) {
                 return Ok(PollResult::Ready(request));
             }
         }
@@ -65,19 +67,19 @@ impl<S, E> Sink for Framed<S, E>
     type Error = io::Error;
 
     fn start_send(&mut self, item: Self::Item) -> StartSend<Self::Item, Self::Error> {
-        if self.buffer.len() != 0 {
+        if self.send_buffer.len() != 0 {
             return Ok(SinkResult::NotReady(item));
         }
-        self.decoder.encode(item, &mut self.buffer);
+        self.decoder.encode(item, &mut self.send_buffer);
         Ok(SinkResult::Ready)
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::Error> {
-        match try_poll_io!(self.stream.write(&self.buffer)) {
+        match try_poll_io!(self.stream.write(&self.send_buffer)) {
             0 => Ok(PollResult::Ready(())),
             n => {
-                self.buffer.drain(..n);
-                if self.buffer.len() == 0 {
+                self.send_buffer.drain(..n);
+                if self.send_buffer.len() == 0 {
                     Ok(PollResult::NotReady)
                 }
                 else {
