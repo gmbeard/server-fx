@@ -26,10 +26,10 @@ impl<P> TcpServer<P>
         S: ToSocketAddrs,
         F: Fn() -> H,
         H: Handler<Request=P::Request, Response=P::Response>,
-        <P::Transport as Sink>::Error: From<<P::Result as IntoPollable>::Error>,
-        <P::Transport as Sink>::Error: From<<P::Transport as Pollable>::Error>,
-        <P::Transport as Sink>::Error: From<<H::Pollable as IntoPollable>::Error>,
-        <P::Transport as Sink>::Error: ::std::fmt::Debug,
+        H::Error: From<<P::Transport as Sink>::Error>,
+        H::Error: From<<P::Transport as Pollable>::Error>,
+        H::Error: From<<P::Result as IntoPollable>::Error>,
+        H::Error: ::std::fmt::Debug,
     {
         let listener = net::TcpListener::bind(s)?;
         let handler = Arc::new(f());

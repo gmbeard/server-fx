@@ -9,8 +9,9 @@ use server_fx::bind_transport::BindTransport;
 use server_fx::server::TcpServer;
 use server_fx::framed::Framed;
 use server_fx::pollable::{IntoPollable, Pollable, PollableResult};
+use server_fx::http::router::{HandleRouteResult, Parameters, Route, RouteHandler};
 
-struct HttpServer;
+struct HttpServer(Vec<Route>);
 
 macro_rules! str {
     ($e: expr) => {
@@ -35,6 +36,25 @@ fn debug_request(r: &types::Request) {
 
 }
 
+struct SimpleHtmlRouteHandler;
+
+impl RouteHandler for SimpleHtmlRouteHandler {
+    fn handle(&self, 
+              request: types::Request, 
+              params: &Parameters) 
+        -> types::Response 
+    {
+        let mut response = types::ResponseBuilder::new(200, "OK")
+            .build_with_content(include_bytes!("simple.html").to_vec());
+
+        response.add_header("Content-Type", "text/html");
+        response.add_header("Connection", "close");
+
+        response
+    }
+}
+
+
 struct HandlerError;
 
 impl Handler for HttpServer {
@@ -47,10 +67,24 @@ impl Handler for HttpServer {
 
         debug_request(&request);
 
-        let mut response = types::ResponseBuilder::new(200, "OK")
-            .build_with_content(b"Hello, World!".to_vec());
+        let mut r = request;
+        for route in self.0.iter() {
+            match route.handle(r) {
+                HandleRouteResult::Handled(response) => {
+                    return Box::new(
+                        response.into_pollable()
+                                .map_err(|_| io::Error::from(io::ErrorKind::Other))
+                    )
+                },
+                HandleRouteResult::NotHandled(request) => {
+                    r = request;
+                },
+            }
+        }
 
-        response.add_header("Content-Type", "text/plain");
+        let mut response = types::ResponseBuilder::new(404, "Not Found")
+            .build();
+
         response.add_header("Connection", "close");
 
         Box::new(
@@ -106,6 +140,10 @@ impl<Io> BindTransport<Io> for HttpProto where
 
 fn main() {
     TcpServer::new(HttpProto)
-        .serve("127.0.0.1:5050", || HttpServer)
+        .serve("127.0.0.1:5050", || {
+            HttpServer(vec![
+                Route::new(types::HttpMethod::Get, "/simple.html", SimpleHtmlRouteHandler)
+            ])
+        })
         .unwrap();
 }

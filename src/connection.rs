@@ -27,11 +27,11 @@ impl<H, S> Connection<H, S> where
 impl<H, S> Pollable for Connection<H, S> where 
     H: Handler,
     S: Pollable<Item=H::Request> + Sink<Item=H::Response> + 'static,
-    <S as Sink>::Error: From<<S as Pollable>::Error>,
-    <S as Sink>::Error: From<<H::Pollable as IntoPollable>::Error>,
+    H::Error: From<<S as Pollable>::Error>,
+    H::Error: From<<S as Sink>::Error>,
 {
     type Item = ();
-    type Error = <S as Sink>::Error;
+    type Error = H::Error; //<S as Sink>::Error;
 
     fn poll(&mut self) -> Result<PollResult<Self::Item>, Self::Error> {
         use std::mem;
