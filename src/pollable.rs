@@ -1,6 +1,7 @@
 use join::Join;
 use and_then::AndThen;
 use result::PollResult;
+use map_err::MapErr;
 
 pub trait Pollable {
     type Item;
@@ -23,6 +24,22 @@ pub trait Pollable {
         Self: Sized,
     {
         AndThen::new(self, f)
+    }
+
+    fn map_err<F, E>(self, f: F) -> MapErr<Self, F> where
+        F: FnOnce(Self::Error) -> E,
+        Self: Sized,
+    {
+        MapErr::new(self, f)
+    }
+}
+
+impl<P: Pollable + ?Sized> Pollable for Box<P> {
+    type Item = P::Item;
+    type Error = P::Error;
+
+    fn poll(&mut self) -> Result<PollResult<Self::Item>, Self::Error> {
+        (&mut **self).poll()
     }
 }
 

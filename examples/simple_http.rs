@@ -8,7 +8,7 @@ use server_fx::codec::{Decode, Encode};
 use server_fx::bind_transport::BindTransport;
 use server_fx::server::TcpServer;
 use server_fx::framed::Framed;
-use server_fx::pollable::{IntoPollable, PollableResult};
+use server_fx::pollable::{IntoPollable, Pollable, PollableResult};
 
 struct HttpServer;
 
@@ -35,31 +35,28 @@ fn debug_request(r: &types::Request) {
 
 }
 
+struct HandlerError;
+
 impl Handler for HttpServer {
     type Request = types::Request;
-    type Response = types::Response;
+    type Response = (types::Response, types::BodyChunk);
     type Error = io::Error;
-    type Pollable = Result<Self::Response, Self::Error>;
+    type Pollable = Box<Pollable<Item=Self::Response, Error=io::Error>>;
 
     fn handle(&self, request: Self::Request) -> Self::Pollable {
 
         debug_request(&request);
 
-        let mut response = types::ResponseBuilder::new(302, "Moved")
-            .build();
+        let mut response = types::ResponseBuilder::new(200, "OK")
+            .build_with_content(b"Hello, World!".to_vec());
 
-        response.add_header("Content-Length", "0");
-        response.add_header("Location", "/about.html");
+        response.add_header("Content-Type", "text/plain");
         response.add_header("Connection", "close");
 
-//        static RESPONSE: &'static [u8] = 
-//            b"HTTP/1.1 302 Moved\r\n\
-//              Content-Length: 0\r\n\
-//              Location: /about.html\r\n\
-//              Connection: close\r\n\
-//              \r\n";
-
-        Ok(response)
+        Box::new(
+            response.into_pollable()
+                .map_err(|_| io::Error::from(io::ErrorKind::Other))
+        )
     }
 }
 
@@ -69,24 +66,26 @@ impl Decode for HttpCodec {
     type Item = types::Request;
 
     fn decode(&self, buffer: &mut Vec<u8>) -> Option<Self::Item> {
-        types::parse_request(buffer)        
+        types::parse_request(buffer)
     }
 }
 
 impl Encode for HttpCodec {
-    type Item = types::Response;
+    type Item = (types::Response, types::BodyChunk);
 
     fn encode(&self, response: Self::Item, buffer: &mut Vec<u8>) {
         let mut s = format!("{} {} {}\r\n",
-                        response.version(),
-                        response.status_code(),
-                        response.status_text());
-        for (n, v) in response.headers() {
+                        response.0.version(),
+                        response.0.status_code(),
+                        response.0.status_text());
+        for (n, v) in response.0.headers() {
             s.push_str(format!("{}: {}\r\n", n, v).as_ref());
         }
+        s.push_str(format!("Content-Length: {}\r\n", response.1.len()).as_ref());
         s.push_str(format!("\r\n").as_ref());
 
         buffer.extend(s.as_bytes());
+        buffer.extend(response.1);
     }
 }
 
@@ -96,7 +95,7 @@ impl<Io> BindTransport<Io> for HttpProto where
     Io: io::Read + io::Write + 'static
 {
     type Request = types::Request;
-    type Response = types::Response;
+    type Response = (types::Response, types::BodyChunk);
     type Transport = Framed<Io, HttpCodec>;
     type Result = Result<Self::Transport, io::Error>;
 

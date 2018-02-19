@@ -24,3 +24,4 @@ pub mod result;
 pub mod twist;
 pub mod http;
 pub mod connection;
+pub mod map_err;
