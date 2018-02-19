@@ -8,6 +8,7 @@ mod v2 {
     use super::HttpMethod;
     use super::to_lower;
 
+    use result::PollResult;
     use pollable::{IntoPollable, Pollable, PollableResult};
 
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -28,7 +29,7 @@ mod v2 {
     #[derive(Debug)]
     pub struct Header(String, String);
 
-    type BodyChunk = Vec<u8>;
+    pub type BodyChunk = Vec<u8>;
 
     pub struct HeaderIter<'a>(::std::slice::Iter<'a, Header>);
 
@@ -75,6 +76,43 @@ mod v2 {
                 })
                 .map(|i| &*self.headers[i].1)
         }
+
+        fn poll_body(&mut self) -> Result<PollResult<B::Item>, B::Error> {
+            self.body.poll()
+        }
+    }
+
+    impl<B> IntoPollable for Response<B> where
+        B: Pollable<Item=BodyChunk>
+    {
+        type Item = (Self, BodyChunk);
+        type Error = B::Error;
+        type Pollable = ResponsePollable<B>;
+
+        fn into_pollable(self) -> Self::Pollable {
+            ResponsePollable(Some(self))
+        }
+    }
+
+    pub struct ResponsePollable<B>(Option<Response<B>>);
+
+    impl<B> Pollable for ResponsePollable<B> where
+        B: Pollable<Item=BodyChunk>
+    {
+        type Item = (Response<B>, B::Item);
+        type Error = B::Error;
+        
+        fn poll(&mut self) -> Result<PollResult<Self::Item>, Self::Error> {
+            match self.0.take() {
+                Some(mut r) => match r.poll_body()? {
+                    PollResult::Ready(body) => return Ok(PollResult::Ready((r, body))),
+                    PollResult::NotReady => self.0 = Some(r),
+                },
+                None => panic!("Poll called on finished result"),
+            }
+
+            Ok(PollResult::NotReady)
+        }
     }
 
     pub struct Response<B = PollableResult<BodyChunk, ()>> {
@@ -108,6 +146,10 @@ mod v2 {
 
         pub fn header_value(&self, name: &str) -> Option<&str> {
             self.inner.header_value(name)
+        }
+
+        pub fn poll_body(&mut self) -> Result<PollResult<B::Item>, B::Error> {
+            self.inner.poll_body()
         }
     }
 
@@ -163,16 +205,22 @@ mod v2 {
         }
 
         pub fn build(&self) -> Response {
-            self.build_with_pollable(Ok(vec![]))
+            self._build(Ok(vec![]))
         }
 
-        pub fn build_with_buffer<I>(&self, body: I) -> Response where
+        pub fn build_with_content<T>(&self, t: T) -> Response where
+            T: AsRef<[u8]>
+        {
+            self._build(Ok(t.as_ref().to_vec()))
+        }
+
+        pub fn build_with_stream<I>(&self, body: I) -> Response where
                 I: IntoIterator<Item=u8>
         {
-            self.build_with_pollable(Ok(body.into_iter().collect::<BodyChunk>()))
+            self._build(Ok(body.into_iter().collect::<BodyChunk>()))
         }
 
-        pub fn build_with_pollable<B>(&self, body: B) 
+        fn _build<B>(&self, body: B)
             -> Response<B::Pollable> where
                 B: IntoPollable<Item=BodyChunk>
         {
@@ -185,6 +233,13 @@ mod v2 {
                 status_code: self.status_code,
                 status_text: String::from(self.status_text),
             }
+        }
+
+        pub fn build_with_pollable<B>(&self, body: B) 
+            -> Response<B::Pollable> where
+                B: IntoPollable<Item=BodyChunk>
+        {
+            self._build(body)
         }
     }
 
@@ -333,7 +388,8 @@ fn convert_slice_to_indices<T>(s: &[T], source: &[T]) -> Slice {
     };
 
     if (sub.0 < source.0) || (sub.1 > source.1) {
-        panic!("Sub-slice is outside the bounds of its source");
+        panic!("Sub-slice is outside the bounds of its source ({}, {}: {}) - ({}, {}: {})",
+               sub.0, sub.1, sub.1 - sub.0, source.0, source.1, source.1 - source.0);
     }
 
     Slice(sub.0 - source.0, sub.1 - source.0) 
@@ -437,7 +493,13 @@ impl DetachedResponse {
     }
 }
 
-pub use self::v2::{Request, RequestBuilder, Response, ResponseBuilder};
+pub use self::v2::{
+    BodyChunk, 
+    Request, 
+    RequestBuilder, 
+    Response, 
+    ResponseBuilder
+};
 
 impl<'h, 'b: 'h> FromParsed<parser::Request<'h, 'b>> for DetachedRequest {
     fn from_parsed(source: parser::Request<'h, 'b>, 
@@ -578,21 +640,22 @@ mod tests {
 
     #[test]
     fn convert_a_parsed_request() {
-        let mut buffer = b"GET /index.html HTTP/1.1\r\n\
-            Host: www.someserver.com\r\n\
-            \r\n\
-            Hello, World!".to_vec();
+        let mut buffer = b"GET /a HTTP/1.1\r\n\
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
+Accept-Encoding: gzip, deflate\r\n\
+Accept-Language: en-US,en;q=0.5\r\n\r\n".to_vec();
 
         let r = parse_request(&mut buffer).unwrap();
 
         assert_eq!(HttpMethod::Get, r.method());
-        assert_eq!("/index.html", r.path());
+        assert_eq!("/a", r.path());
         assert_eq!(v2::HttpVersion::Http11, r.version());
         assert_eq!(
-            ("Host".as_ref(), "www.someserver.com".as_ref()), 
-            r.headers().next().unwrap()
+            ("Accept-Encoding".as_ref(), "gzip, deflate".as_ref()), 
+            r.headers().nth(1).unwrap()
         );
-        assert_eq!(b"Hello, World!", &*buffer);
+        println!("{}", ::std::str::from_utf8(&*buffer).unwrap());
+        assert_eq!(b"", &*buffer);
     }
 
     #[test]
