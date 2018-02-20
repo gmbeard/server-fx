@@ -1,0 +1,55 @@
+body {
+    font-family: Consolas, "Courier New";
+    font-size: 1.1em;
+    line-height: 1.5em;
+    position: relative;
+    display: grid;
+    grid-template-columns: 75px auto 75px;
+    grid-template-rows: 25% auto;
+}
+
+pre, code {
+    background-color: #f0f0f0;
+    padding: 0 10px;
+    font-family: "Courier New";
+    font-size: 0.9em;
+    line-height: 1.25em;
+}
+
+body div.content {
+    position: relative;
+    grid-column-start: 2;
+    grid-column-end: 3;
+    grid-row-start: 2;
+    grid-row-end: 3;
+}
+
+body div.content {
+    animation: slide-up 0.1s;
+}
+
+body div.content.out-content {
+    animation: slide-down 0.1s;
+}
+
+@keyframes slide-down {
+    0% {
+        top: 0;
+        opacity: 1.0;
+    }
+    100% {
+        top: 10px;
+        opacity: 0.0;
+    }
+}
+
+@keyframes slide-up {
+    0% {
+        top: 10px;
+        opacity: 0.0;
+    }
+    100% {
+        top: 0px;
+        opacity: 1.0;
+    }
+}

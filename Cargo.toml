@@ -3,4 +3,5 @@ name = "server-fx"
 version = "0.1.0"
 authors = ["Greg Beard <greg.m.beard@gmail.com>"]
 
-[dependencies]
+[dev-dependencies]
+pulldown-cmark = "*"
