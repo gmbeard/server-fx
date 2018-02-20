@@ -125,6 +125,39 @@ impl Route {
     }
 }
 
+pub struct Router {
+    routes: Vec<Route>,
+}
+
+impl Router {
+    pub fn new<I>(routes: I) -> Router where
+        I: IntoIterator<Item=Route>
+    {
+        Router {
+            routes: routes.into_iter().collect(),
+        }
+    }
+
+    pub fn route(&self, 
+                 req: types::Request) 
+        -> HandleRouteResult<types::Response, types::Request>
+    {
+        let mut r = req;
+        for route in self.routes.iter() {
+            match route.handle(r) {
+                HandleRouteResult::Handled(response) => {
+                    return HandleRouteResult::Handled(response);
+                },
+                HandleRouteResult::NotHandled(request) => {
+                    r = request;
+                },
+            }
+        }
+
+        HandleRouteResult::NotHandled(r)
+    }
+}
+
 #[cfg(test)]
 mod route_should {
     use super::*;
