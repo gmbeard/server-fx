@@ -1,7 +1,7 @@
 extern crate pulldown_cmark;
 
 use std::path::PathBuf;
-use std::io::{Read, Write};
+use std::io::Read;
 
 use server_fx::http::router::{Parameters, RouteHandler};
 use server_fx::http::types::{Request, Response, ResponseBuilder};
@@ -35,8 +35,6 @@ impl RouteHandler for ContentRouteHandler {
                     .build();
             }
         };
-
-        println!("{}", path.to_str().unwrap());
 
         if !path.exists() {
                 return ResponseBuilder::new(404, "Not found")

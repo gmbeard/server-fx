@@ -30,27 +30,10 @@ fn mime_type_for_extension(ext: Option<&OsStr>) -> Option<&'static str> {
             .map(|n| MIME_MAP[n].1))
 }
 
-fn debug_request(r: &types::Request) {
-    write!(io::stdout(), "{} {} {}\r\n", 
-           r.method(),
-           r.path(),
-           r.version())
-        .expect("Couldn't write to STDOUT");
-
-    for (name, value) in r.headers() {
-        write!(io::stdout(), "{}: {}\r\n", name, value)
-            .expect("Couldn't write to STDOUT");
-    }
-
-    writeln!(io::stdout(), "")
-        .expect("Couldn't write to STDOUT");
-
-}
-
 impl RouteHandler for SimpleHtmlRouteHandler {
     fn handle(&self, 
               request: types::Request, 
-              params: &Parameters) 
+              _params: &Parameters) 
         -> types::Response 
     {
         let abs_path = self.base_path.join(&request.path()[1..]);
@@ -78,9 +61,6 @@ impl RouteHandler for SimpleHtmlRouteHandler {
     }
 }
 
-
-struct HandlerError;
-
 pub(super) struct HttpServer(pub(super) Router);
 
 impl Handler for HttpServer {
@@ -90,8 +70,6 @@ impl Handler for HttpServer {
     type Pollable = Box<Pollable<Item=Self::Response, Error=io::Error>>;
 
     fn handle(&self, request: Self::Request) -> Self::Pollable {
-
-        debug_request(&request);
 
         let resp = match self.0.route(request) {
             HandleRouteResult::NotHandled(_) => {

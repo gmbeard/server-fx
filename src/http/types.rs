@@ -555,8 +555,6 @@ impl<'h, 'b: 'h> FromParsed<parser::Response<'h, 'b>> for DetachedResponse {
 }
 
 pub fn parse_request(buffer: &mut Vec<u8>) -> Option<Request> {
-    use std::str::from_utf8;
-
     let (r, consumed) = {
         let mut headers = [parser::Header::default(); 32];
         let mut request = parser::Request::new(&mut headers);
@@ -583,8 +581,6 @@ pub fn parse_request(buffer: &mut Vec<u8>) -> Option<Request> {
 }
 
 pub fn parse_response(buffer: &mut Vec<u8>) -> Option<Response> {
-    use std::str::from_utf8;
-
     let (r, consumed) = {
         let mut headers = [parser::Header::default(); 32];
         let mut response = parser::Response::new(&mut headers);

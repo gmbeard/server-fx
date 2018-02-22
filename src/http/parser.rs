@@ -29,7 +29,6 @@ fn skip_whitespace(data: &[u8]) -> &[u8] {
             tail
         })
         .unwrap_or_else(|| {
-            let last = data.len();
             &data[0..0]
         })
 }
@@ -42,7 +41,6 @@ fn skip_header_separator(data: &[u8]) -> &[u8] {
             tail
         })
         .unwrap_or_else(|| {
-            let last = data.len();
             &data[0..0]
         })
 }
@@ -292,13 +290,10 @@ impl<'h, 'b: 'h> Object<'h, 'b> {
 
         let mut parser = HeaderParser::new(header_data);
         let mut header_idx = 0;
-        let mut bytes_parsed = 
-            (header_data.as_ptr() as usize) - 
-            (data.as_ptr() as usize);
 
         while let Some((Header(name, val), tail)) = parser.parse() {
-            bytes_parsed = (tail.as_ptr() as usize) - 
-                           (data.as_ptr() as usize);
+            let bytes_parsed = (tail.as_ptr() as usize) - 
+                               (data.as_ptr() as usize);
 
             if name.len() == 0 {
                 self.headers =  unsafe { 
@@ -369,9 +364,9 @@ impl<'h, 'b: 'h> ::std::fmt::Debug for Request<'h, 'b> {
         write!(f, "{} {} {}\r\n", 
                from_utf8(self.method()).unwrap(),
                from_utf8(self.path()).unwrap(),
-               from_utf8(self.version()).unwrap());
+               from_utf8(self.version()).unwrap())?;
         for h in self.headers() {
-            write!(f, "{:?}", h);
+            write!(f, "{:?}", h)?;
         }
         Ok(())
     }

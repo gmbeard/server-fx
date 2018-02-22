@@ -47,8 +47,6 @@ impl<S, D> Pollable for Transfer<S, D>
     type Error = io::Error;
 
     fn poll(&mut self) -> Result<PollResult<Self::Item>, Self::Error> {
-        use std::mem;
-
         loop {
             let next = match self.state {
                 TransferState::Reading => {

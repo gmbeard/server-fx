@@ -3,7 +3,7 @@ use std::sync::Arc;
 use handler::Handler;
 use pollable::{IntoPollable, Pollable};
 use result::PollResult;
-use sink::{SendOne, Sink, SinkResult};
+use sink::{SendOne, Sink};
 
 pub enum Connection<H, S> where
     H: Handler,

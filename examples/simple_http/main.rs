@@ -4,8 +4,6 @@ mod handler;
 mod proto;
 mod content_handler;
 
-use std::io::{self, Write};
-
 use server_fx::http::types;
 use server_fx::server::TcpServer;
 use server_fx::http::router::{

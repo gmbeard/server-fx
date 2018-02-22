@@ -59,8 +59,6 @@ impl<S, I> Pollable for SendOne<S, I>
                 None => return self.inner.poll_complete(),
             }
         }
-
-        Ok(PollResult::NotReady)
     }
 }
 

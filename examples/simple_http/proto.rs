@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write};
+use std::io;
 
 use server_fx::codec::{Decode, Encode};
 use server_fx::http::types;

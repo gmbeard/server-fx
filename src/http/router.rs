@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use http::types;
 
 #[derive(Debug, PartialEq)]
@@ -92,14 +90,14 @@ pub enum HandleRouteResult<T, U> {
 pub struct Route {
     method: types::HttpMethod,
     pattern: Pattern,
-    handler: Box<RouteHandler>,
+    handler: Box<RouteHandler + Send + Sync + 'static>,
 }
 
 impl Route {
     pub fn new<H>(method: types::HttpMethod, 
                   uri_pat: &str, 
                   handler: H) -> Route where
-        H: RouteHandler + 'static
+        H: RouteHandler + Send + Sync + 'static
     {
         Route {
             method: method,

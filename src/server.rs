@@ -6,15 +6,16 @@ use bind_transport::BindTransport;
 use handler::Handler;
 use pollable::{IntoPollable, Pollable};
 use sink::Sink;
-use result::PollResult;
-use connection::Connection;
+use thread_pool::ThreadPool;
+
+const NUM_THREADS: usize = 4;
 
 pub struct TcpServer<P> {
     proto: Arc<P>,
 }
 
 impl<P> TcpServer<P> 
-    where P: BindTransport<net::TcpStream>
+    where P: BindTransport<net::TcpStream> + Send + Sync + 'static,
 {
     pub fn new(proto: P) -> TcpServer<P> {
         TcpServer { 
@@ -25,7 +26,7 @@ impl<P> TcpServer<P>
     pub fn serve<S, F, H>(self, s: S, f: F) -> io::Result<()> where 
         S: ToSocketAddrs,
         F: FnOnce() -> H,
-        H: Handler<Request=P::Request, Response=P::Response>,
+        H: Handler<Request=P::Request, Response=P::Response> + Send + Sync + 'static,
         H::Error: From<<P::Transport as Sink>::Error>,
         H::Error: From<<P::Transport as Pollable>::Error>,
         H::Error: From<<P::Result as IntoPollable>::Error>,
@@ -33,25 +34,12 @@ impl<P> TcpServer<P>
     {
         let listener = net::TcpListener::bind(s)?;
         let handler = Arc::new(f());
+        let mut pool = ThreadPool::new(NUM_THREADS, 
+                                       self.proto.clone(), 
+                                       handler.clone());
 
         for stream in listener.incoming() {
-            let stream = stream?;
-            stream.set_nonblocking(true)?;
-
-            let handler = handler.clone();
-            let mut conn =  self.proto.bind_transport(stream)
-                .into_pollable()
-                .and_then(move |transport| Connection::new(transport, handler));
-
-            loop {
-                match conn.poll() {
-                    Ok(PollResult::Ready(_)) => break,
-                    Err(e) => panic!("Error polling Connection: {:?}", e),
-                    _ => {},
-                }
-
-                ::std::thread::yield_now();
-            }
+            pool.queue(stream?);
         }
 
         Ok(())
