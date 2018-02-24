@@ -10,8 +10,8 @@ pub enum Connection<H, S> where
     S: Pollable<Item=H::Request> + Sink<Item=H::Response> + 'static
 {
     Reading(S, Arc<H>),
-    Handling(S, <H::Pollable as IntoPollable>::Pollable),
-    Writing(SendOne<S, H::Response>),
+    Handling(S, Arc<H>, <H::Pollable as IntoPollable>::Pollable),
+    Writing(SendOne<S, H::Response>, Arc<H>),
     Done,
 }
 
@@ -44,20 +44,20 @@ impl<H, S> Pollable for Connection<H, S> where
                     PollResult::Ready(request) => {
                         let pollable = handler.handle(request)
                             .into_pollable();
-                        Connection::Handling(stream, pollable)
+                        Connection::Handling(stream, handler, pollable)
                     },
                 },
-            Connection::Handling(s, mut pollable) => 
+            Connection::Handling(s, h, mut pollable) => 
                 match pollable.poll()? {
                     PollResult::NotReady => 
-                        Connection::Handling(s, pollable),
+                        Connection::Handling(s, h, pollable),
                     PollResult::Ready(response) => 
-                        Connection::Writing(s.send_one(response)),
+                        Connection::Writing(s.send_one(response), h),
                 },
-            Connection::Writing(mut sink) => 
+            Connection::Writing(mut sink, h) => 
                 match sink.poll()? {
-                    PollResult::Ready(_) => return Ok(PollResult::Ready(())),
-                    PollResult::NotReady => Connection::Writing(sink),
+                    PollResult::Ready(_) => Connection::Reading(sink.into_inner(), h), //return Ok(PollResult::Ready(())),
+                    PollResult::NotReady => Connection::Writing(sink, h),
                 },
             Connection::Done => panic!("Poll called on finished result"),
         };

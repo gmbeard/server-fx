@@ -33,6 +33,10 @@ impl<S, I> SendOne<S, I> {
             value: Some(value),
         }
     }
+
+    pub fn into_inner(self) -> S {
+        self.inner
+    }
 }
 
 impl<S, I> Pollable for SendOne<S, I>
