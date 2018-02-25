@@ -97,19 +97,27 @@ fn connection_proc<P, H>(proto: Arc<P>,
             connections.push(Some(conn));
         });
 
-        for c in connections.iter_mut() {
-            let mut current = c.take().unwrap();
-            if let Ok(PollResult::NotReady) =  current.poll() {
-                *c = Some(current);
-            }
-        }
+        pump_connections(&mut connections);
+    }
+}
 
-        let mut n = connections.len();
-        while n > 0 {
-            n -= 1;
-            if connections[n].is_none() {
-                connections.swap_remove(n);
-            }
+fn pump_connections<P: Pollable>(connections: &mut Vec<Option<P>>) {
+
+    for c in connections.iter_mut() {
+        let mut current = c.take()
+            .expect("There are no connections waiting to be polled!");
+
+        if let Ok(PollResult::NotReady) =  current.poll() {
+            *c = Some(current);
+        }
+    }
+
+    let mut n = connections.len();
+    while n > 0 {
+        n -= 1;
+        if connections[n].is_none() {
+            connections.swap_remove(n);
         }
     }
 }
+
